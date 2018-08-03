@@ -1,4 +1,4 @@
-pragma solidity ^0.4.20;
+pragma solidity ^0.4.24;
 
 import "./ownable.sol";
 
@@ -7,7 +7,7 @@ import "./ownable.sol";
         struct Option
         {
             string asset;
-            string type;
+            string optionType;
             uint256 expirationDate;
             uint256 strike;
         }
@@ -19,7 +19,7 @@ import "./ownable.sol";
         }
         
         mapping (address => uint256) public balances;
-        mapping (uint256 => mapping(address => uint256) ownerToCount) optionToOwner;
+        mapping (uint256 => mapping(address => uint256)) optionToOwner;
         
         Option[] public options;
         
@@ -28,15 +28,17 @@ import "./ownable.sol";
             require(optionToOwner[_optionId][msg.sender]>0);
             _;
         }
-        function registerOption(string asset,string type, uint256 expirationDate,uint256 strike) onlyOwner public
+        function registerOption(string asset,string optionType, uint256 expirationDate,uint256 strike) onlyOwner public
         {
-            require(asset==keccak256("DOL") &&(type == keccak256("call") ||type == keccak256("put")) &&
+            require(keccak256(abi.encodePacked(asset))==keccak256("DOL") &&(keccak256(abi.encodePacked(optionType)) == keccak256("call") 
+                    ||keccak256(abi.encodePacked(optionType)) == keccak256("put")) &&
                     expirationDate >= now && strike >= 0 && strike <= 2**52);
-            options.push(Option(asset,type,expirationDate,strike));
+            options.push(Option(asset,optionType,expirationDate,strike));
         }
-        function consultAvailableOptions() public returns (Option[])
+        function consultAvailableOptions(uint pos) public returns (string,string,uint,uint)
         {
-            return options;
+            Option storage option = options[pos];
+            return (option.asset,option.optionType,option.expirationDate,option.strike);
         }
         function buyOptions(uint id, uint numberOfOptions, uint optionPrice)
         {
@@ -46,13 +48,13 @@ import "./ownable.sol";
         }
         function sellOptions(uint id,uint numberOfOptions, uint optionPrice) public ownerOf(id)
         {
-            require(numberOfOptions <= optionToOwner[_optionId][msg.sender]);
+            require(numberOfOptions <= optionToOwner[id][msg.sender]);
             balances[msg.sender] += numberOfOptions*optionPrice;
             optionToOwner[id][msg.sender] -= numberOfOptions;
         }
-        function getPosition() returns (position[])
+        function getPosition() returns (Position[])
         {
-            position[] memory pos = new position[](options.length);
+            Position[] memory pos = new Position[](options.length);
             uint counter = 0;
             for(uint i=0; i<options.length;i++)
             {
@@ -70,18 +72,17 @@ import "./ownable.sol";
         }
         function exertOption(uint id, uint quantity,uint ptaxTax) public ownerOf(id)
         {
-            require(optionToOwner[id][msg.sender]>= quantity)
-            if(options[id].type==keccak256("call"))
+            require(optionToOwner[id][msg.sender]>= quantity);
+            if(keccak256(abi.encodePacked(options[id].optionType))==keccak256("call"))
             {
                 require(balances[msg.sender] >= ptaxTax);
                 balances[msg.sender] -= ptaxTax*quantity;
                 optionToOwner[id][msg.sender]-= quantity;
             }
-            else if(options[id].type==keccak256("put"))
+            else if(keccak256(abi.encodePacked(options[id].optionType))==keccak256("put"))
             {
                 balances[msg.sender] += ptaxTax*quantity;
                 optionToOwner[id][msg.sender]-= quantity;
             }
         }
     }
-
