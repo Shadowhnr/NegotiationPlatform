@@ -28,6 +28,10 @@ import "./ownable.sol";
         mapping (address => PendingTransfer[]) pendingTransfers;
         
         Option[] public options;
+        
+        event BarrierReached(uint optionId,uint knockType,uint knockValue);
+
+        
         modifier validOption(uint id)
         {
             require(id >= 0 && id < options.length);
@@ -86,12 +90,16 @@ import "./ownable.sol";
                    && options[optionId].knockValue < ptaxTax))
                 {
                     ownerToOptions[msg.sender][optionId][from] = 0;
+                    BarrierReached(optionId,options[optionId].knockType,
+                                   options[optionId].knockValue);
                 }
                 //knockin
                 if((options[optionId].knockType == 1
                    && options[optionId].knockValue > ptaxTax))
                 {
                     options[optionId].knockType=0;
+                    BarrierReached(optionId,options[optionId].knockType,
+                                   options[optionId].knockValue);
                 }
             }
             else if(keccak256(abi.encodePacked(options[optionId].optionType))==keccak256("put"))
@@ -101,12 +109,16 @@ import "./ownable.sol";
                    && options[optionId].knockValue > ptaxTax))
                 {
                     ownerToOptions[msg.sender][optionId][from] = 0;
+                    BarrierReached(optionId,options[optionId].knockType,
+                                   options[optionId].knockValue);
                 }
                 //knockin
                 if((options[optionId].knockType == 1
                    && options[optionId].knockValue < ptaxTax))
                 {
                     options[optionId].knockType=0;
+                    BarrierReached(optionId,options[optionId].knockType,
+                                   options[optionId].knockValue);
                 }
             }
             require(ownerToOptions[msg.sender][optionId][from] >= quantity &&
