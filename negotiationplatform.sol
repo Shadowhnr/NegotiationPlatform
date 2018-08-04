@@ -10,6 +10,8 @@ import "./ownable.sol";
             string optionType;
             uint256 expirationDate;
             uint256 strike;
+            uint256 knockType; // knockType = 0 -> vanilla, knockType = 1 -> knockin, knockType = 2  -> knockout
+            uint256 knockValue;
         }
         
         struct PendingTransfer
@@ -36,12 +38,21 @@ import "./ownable.sol";
             require(keccak256(abi.encodePacked(asset))==keccak256("DOL") &&(keccak256(abi.encodePacked(optionType)) == keccak256("call") 
                     ||keccak256(abi.encodePacked(optionType)) == keccak256("put")) &&
                     expirationDate >= now && strike >= 0 && strike <= 2**52);
-            options.push(Option(asset,optionType,expirationDate,strike));
+            options.push(Option(asset,optionType,expirationDate,strike,0,0));
         }
-        function consultAvailableOptions(uint pos) public validOption(pos) returns (string,string,uint,uint)
+        function registerExoticOption(string asset,string optionType, uint256 expirationDate,uint256 strike,uint knockType, uint knockValue) public
+        {
+            require(keccak256(abi.encodePacked(asset))==keccak256("DOL") &&(keccak256(abi.encodePacked(optionType)) == keccak256("call") 
+                    ||keccak256(abi.encodePacked(optionType)) == keccak256("put")) &&
+                    expirationDate >= now && strike >= 0 && strike <= 2**52 && 
+                    (knockType==0 || knockType==1 || knockType==2) &&
+                    knockValue>=0 && knockValue <= 2**52);
+            options.push(Option(asset,optionType,expirationDate,strike,knockType,knockValue));
+        }
+        function consultAvailableOptions(uint pos) public validOption(pos) returns (string,string,uint,uint,uint,uint)
         {
             Option storage option = options[pos];
-            return (option.asset,option.optionType,option.expirationDate,option.strike);
+            return (option.asset,option.optionType,option.expirationDate,option.strike,option.knockType,option.knockValue);
         }
         function buyOptions(uint optionId,address from, uint numberOfOptions, uint optionPrice) public validOption(optionId)
         {
@@ -65,8 +76,39 @@ import "./ownable.sol";
         {
             return balances[msg.sender];
         }
+        // ptax >= knock_out -> kill option
         function exertOption(uint optionId,address from,uint quantity,uint ptaxTax) validOption(optionId) public 
         {
+            if(keccak256(abi.encodePacked(options[optionId].optionType))==keccak256("call"))
+            {
+                //knockout
+                if(options[optionId].expirationDate < now || (options[optionId].knockType == 2 
+                   && options[optionId].knockValue < ptaxTax))
+                {
+                    ownerToOptions[msg.sender][optionId][from] = 0;
+                }
+                //knockin
+                if((options[optionId].knockType == 1
+                   && options[optionId].knockValue > ptaxTax))
+                {
+                    options[optionId].knockType=0;
+                }
+            }
+            else if(keccak256(abi.encodePacked(options[optionId].optionType))==keccak256("put"))
+            {
+                //knockout
+                if(options[optionId].expirationDate < now || (options[optionId].knockType == 2 
+                   && options[optionId].knockValue > ptaxTax))
+                {
+                    ownerToOptions[msg.sender][optionId][from] = 0;
+                }
+                //knockin
+                if((options[optionId].knockType == 1
+                   && options[optionId].knockValue < ptaxTax))
+                {
+                    options[optionId].knockType=0;
+                }
+            }
             require(ownerToOptions[msg.sender][optionId][from] >= quantity &&
                     options[optionId].expirationDate>=now);
             if(keccak256(abi.encodePacked(options[optionId].optionType))==keccak256("call"))
@@ -75,13 +117,18 @@ import "./ownable.sol";
                 balances[msg.sender] -= (options[optionId].strike - ptaxTax)*quantity;
                 balances[from] += (options[optionId].strike - ptaxTax)*quantity;
                 ownerToOptions[msg.sender][optionId][from]-= quantity;
-                
             }
             else if(keccak256(abi.encodePacked(options[optionId].optionType))==keccak256("put"))
             {
                 balances[msg.sender] += (options[optionId].strike - ptaxTax)*quantity;
                 balances[from] -= (options[optionId].strike - ptaxTax)*quantity;
                 ownerToOptions[msg.sender][optionId][from] -= quantity;
+            }
+            //knockin
+            if (options[optionId].knockType == 1 
+               && options[optionId].knockValue > ptaxTax)
+            {
+                options[optionId].knockType = 0;
             }
         }
         function getPendingTransfer(uint pos) public returns
