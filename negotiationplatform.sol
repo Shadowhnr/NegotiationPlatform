@@ -12,20 +12,23 @@ import "./ownable.sol";
             uint256 strike;
         }
         
-        struct Position
+        struct PendingTransfer
         {
-            Option option;
-            uint256 quantity;
+            uint optionId;
+            address from;
+            uint count;
+            uint price;
+            string transferType;
         }
         
         mapping (address => uint256) public balances;
-        mapping (uint256 => mapping(address => uint256)) optionToOwner;
+        mapping (address => mapping(uint => mapping(address => uint))) ownerToOptions;
+        mapping (address => PendingTransfer[]) pendingTransfers;
         
         Option[] public options;
-        
-        modifier ownerOf(uint _optionId)
+        modifier validOption(uint id)
         {
-            require(optionToOwner[_optionId][msg.sender]>0);
+            require(id >= 0 && id < options.length);
             _;
         }
         function registerOption(string asset,string optionType, uint256 expirationDate,uint256 strike) onlyOwner public
@@ -35,54 +38,94 @@ import "./ownable.sol";
                     expirationDate >= now && strike >= 0 && strike <= 2**52);
             options.push(Option(asset,optionType,expirationDate,strike));
         }
-        function consultAvailableOptions(uint pos) public returns (string,string,uint,uint)
+        function consultAvailableOptions(uint pos) public validOption(pos) returns (string,string,uint,uint)
         {
             Option storage option = options[pos];
             return (option.asset,option.optionType,option.expirationDate,option.strike);
         }
-        function buyOptions(uint id, uint numberOfOptions, uint optionPrice)
+        function buyOptions(uint optionId,address from, uint numberOfOptions, uint optionPrice) public validOption(optionId)
         {
             require(balances[msg.sender] >= numberOfOptions*optionPrice);
-            balances[msg.sender] -= numberOfOptions*optionPrice;
-            optionToOwner[id][msg.sender] += numberOfOptions;
+            pendingTransfers[from].push(PendingTransfer(optionId,msg.sender,numberOfOptions,numberOfOptions*optionPrice,"buy"));
         }
-        function sellOptions(uint id,uint numberOfOptions, uint optionPrice) public ownerOf(id)
+        function sellOptions(uint optionId,address from,uint numberOfOptions, uint optionPrice) public validOption(optionId)
         {
-            require(numberOfOptions <= optionToOwner[id][msg.sender]);
-            balances[msg.sender] += numberOfOptions*optionPrice;
-            optionToOwner[id][msg.sender] -= numberOfOptions;
+            pendingTransfers[from].push(PendingTransfer(optionId,msg.sender,numberOfOptions,numberOfOptions*optionPrice,"sell"));
         }
-        function getPosition() returns (Position[])
+        function getPosition(uint optionId,address from) validOption(optionId) public returns 
+        (string,string,uint,uint,uint)
         {
-            Position[] memory pos = new Position[](options.length);
-            uint counter = 0;
-            for(uint i=0; i<options.length;i++)
-            {
-                if(optionToOwner[i][msg.sender]>0)
-                {
-                    pos[counter] = Position(options[i],optionToOwner[i][msg.sender]);
-                    counter++;
-                }
-            }
-            return pos;
+            return (options[optionId].asset,
+                    options[optionId].optionType,
+                    options[optionId].expirationDate,
+                    options[optionId].strike,
+                    ownerToOptions[msg.sender][optionId][from]);
         }
         function getBalance() public returns (uint)
         {
             return balances[msg.sender];
         }
-        function exertOption(uint id, uint quantity,uint ptaxTax) public ownerOf(id)
+        function exertOption(uint optionId,address from,uint quantity,uint ptaxTax) validOption(optionId) public 
         {
-            require(optionToOwner[id][msg.sender]>= quantity);
-            if(keccak256(abi.encodePacked(options[id].optionType))==keccak256("call"))
+            require(ownerToOptions[msg.sender][optionId][from] >= quantity &&
+                    options[optionId].expirationDate>=now);
+            if(keccak256(abi.encodePacked(options[optionId].optionType))==keccak256("call"))
             {
                 require(balances[msg.sender] >= ptaxTax);
-                balances[msg.sender] -= ptaxTax*quantity;
-                optionToOwner[id][msg.sender]-= quantity;
+                balances[msg.sender] -= (options[optionId].strike - ptaxTax)*quantity;
+                balances[from] += (options[optionId].strike - ptaxTax)*quantity;
+                ownerToOptions[msg.sender][optionId][from]-= quantity;
+                
             }
-            else if(keccak256(abi.encodePacked(options[id].optionType))==keccak256("put"))
+            else if(keccak256(abi.encodePacked(options[optionId].optionType))==keccak256("put"))
             {
-                balances[msg.sender] += ptaxTax*quantity;
-                optionToOwner[id][msg.sender]-= quantity;
+                balances[msg.sender] += (options[optionId].strike - ptaxTax)*quantity;
+                balances[from] -= (options[optionId].strike - ptaxTax)*quantity;
+                ownerToOptions[msg.sender][optionId][from] -= quantity;
             }
+        }
+        function getPendingTransfer(uint pos) public returns
+        (uint,
+         address,
+         uint,
+         uint,
+         string)
+        {
+            require(pos>=0 && pos < pendingTransfers[msg.sender].length);
+            return (pendingTransfers[msg.sender][pos].optionId,
+                    pendingTransfers[msg.sender][pos].from,
+                    pendingTransfers[msg.sender][pos].count,
+                    pendingTransfers[msg.sender][pos].price,
+                    pendingTransfers[msg.sender][pos].transferType);
+        }
+        function approvePendingTransfer(uint pos) public
+        {
+            require(pos>=0 && pos < pendingTransfers[msg.sender].length);
+            if(keccak256(abi.encodePacked(pendingTransfers[msg.sender][pos].transferType))
+               == keccak256("buy"))
+            {
+               require(balances[pendingTransfers[msg.sender][pos].from] >=  pendingTransfers[msg.sender][pos].price);
+               balances[pendingTransfers[msg.sender][pos].from] -=  pendingTransfers[msg.sender][pos].price;
+               balances[msg.sender] +=  pendingTransfers[msg.sender][pos].price;
+                  
+            }
+            else if(keccak256(abi.encodePacked(pendingTransfers[msg.sender][pos].transferType))
+                    == keccak256("sell"))
+            {
+               require(balances[msg.sender] >=  pendingTransfers[msg.sender][pos].price);
+               balances[pendingTransfers[msg.sender][pos].from] +=  pendingTransfers[msg.sender][pos].price;
+               balances[msg.sender] -=  pendingTransfers[msg.sender][pos].price;
+            }
+            ownerToOptions[msg.sender][ pendingTransfers[msg.sender][pos].optionId][ pendingTransfers[msg.sender][pos].from] -=  pendingTransfers[msg.sender][pos].count;
+            ownerToOptions[ pendingTransfers[msg.sender][pos].from][ pendingTransfers[msg.sender][pos].optionId][msg.sender] +=  pendingTransfers[msg.sender][pos].count;
+            _deletePendingTransfer(pos);
+        }
+        function _deletePendingTransfer(uint pos) private
+        {
+            for (uint i = pos; i < pendingTransfers[msg.sender].length-1; i++)
+            {
+                pendingTransfers[msg.sender][i] = pendingTransfers[msg.sender][i+1];
+            }
+            pendingTransfers[msg.sender].length--;
         }
     }
